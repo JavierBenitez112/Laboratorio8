@@ -17,7 +17,7 @@ library(dplyr)
 library(ggplot2)
 library(caret)
 
-load("datasets/listings.Rdata")
+load("./datasets/listings.Rdata")
 
 # Limpieza de precio (misma que entregas anteriores)
 listings$price <- as.numeric(gsub("[$,]", "", listings$price))
@@ -79,6 +79,28 @@ summary(m1)
 
 4. Analice el modelo. Determine si hay multicolinealidad en las variables, y cuáles son las que aportan al modelo, por su valor de significación. Haga un análisis de correlación de las variables del modelo y especifique si el modelo se adapta bien a los datos.
 
+
+```{r}
+library(corrplot)
+
+cor_matrix <- cor(train[, features])
+corrplot(cor_matrix, method = "color", type = "upper",
+         addCoef.col = "black", number.cex = 0.7,
+         tl.cex = 0.8, title = "Correlación entre predictores",
+         mar = c(0,0,1,0))
+
+library(pscl)
+pR2(m1)["McFadden"]
+```
+
 5. Utilice el modelo con el conjunto de prueba y determine la eficiencia del algoritmo para clasificar.
 
+
+```{r}
+```
+
+
 6. Explique si hay sobreajuste (overfitting) o no (recuerde usar para esto los errores del conjunto de prueba y de entrenamiento). Muestre las curvas de aprendizaje usando los errores de los conjuntos de entrenamiento y prueba.
+
+```{r}
+```
