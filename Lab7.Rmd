@@ -1,0 +1,84 @@
+---
+title: "Lab7"
+author: "Pedro Avila, Javier Benitez, Brandon Rivera"
+date: "2026-04-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Pasaporte
+
+### Preparación de datos
+```{r}
+library(dplyr)
+library(ggplot2)
+library(caret)
+
+load("datasets/listings.Rdata")
+
+# Limpieza de precio (misma que entregas anteriores)
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+listings <- listings |> filter(!is.na(price), price > 0, price < 1000)
+
+# Variables numéricas relevantes
+features <- c("accommodates", "bathrooms", "bedrooms", "beds",
+              "minimum_nights", "number_of_reviews", "review_scores_rating")
+
+listings_clean <- listings |>
+  select(all_of(features), price) |>
+  na.omit()
+
+# Variable categórica de precio (misma que entregas anteriores)
+q33 <- quantile(listings_clean$price, 0.33)
+q66 <- quantile(listings_clean$price, 0.66)
+
+listings_clean$price_cat <- cut(
+  listings_clean$price,
+  breaks = c(-Inf, q33, q66, Inf),
+  labels = c("barata", "media", "cara")
+)
+
+
+```
+
+### churn
+```{r}
+# Variable dicotómica de churn (misma que entregas anteriores)
+listings_clean$churn <- ifelse(listings_clean$price_cat == "cara", 1, 0)
+```
+
+1. Cree una variable dicotómica por cada una de las categorías de la variable respuesta categórica que creó en hojas anteriores. Debería tener 3 variables dicotómicas (valores 0 y 1) una que diga si el airbnb es caro o no, medio o no, económico o no.
+
+```{r}
+listings_clean$es_barata <- ifelse(listings_clean$price_cat == "barata", 1, 0)
+listings_clean$es_media <- ifelse(listings_clean$price_cat == "media", 1, 0)
+listings_clean$es_cara <- ifelse(listings_clean$price_cat == "cara", 1, 0)
+```
+
+2. Use los mismos conjuntos de entrenamiento y prueba que utilizó en las hojas anteriores.
+
+```{r}
+# Split 70/30 con misma semilla
+set.seed(42)
+idx <- createDataPartition(listings_clean$price, p = 0.7, list = FALSE)
+train <- listings_clean[idx, ]
+test  <- listings_clean[-idx, ]
+```
+
+
+3. Elabore un modelo de regresión logística para conocer si una vivienda es cara o no, utilizando el conjunto de entrenamiento y explique los resultados a los que llega. El experimento debe ser reproducible por lo que debe fijar que los conjuntos de entrenamiento y prueba sean los mismos siempre que se ejecute el código. Use validación cruzada. Ponga el umbral de decisión en 0.5.
+
+```{r m}
+m1 <- glm(churn ~ accommodates + bathrooms + bedrooms + beds + minimum_nights + number_of_reviews + review_scores_rating,
+          data = train, family = "binomial")
+summary(m1)
+```
+
+4. Analice el modelo. Determine si hay multicolinealidad en las variables, y cuáles son las que aportan al modelo, por su valor de significación. Haga un análisis de correlación de las variables del modelo y especifique si el modelo se adapta bien a los datos.
+
+5. Utilice el modelo con el conjunto de prueba y determine la eficiencia del algoritmo para clasificar.
+
+6. Explique si hay sobreajuste (overfitting) o no (recuerde usar para esto los errores del conjunto de prueba y de entrenamiento). Muestre las curvas de aprendizaje usando los errores de los conjuntos de entrenamiento y prueba.
