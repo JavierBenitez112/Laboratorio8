@@ -3,7 +3,6 @@
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
-
   outputs =
     {
       nixpkgs,
@@ -12,10 +11,8 @@
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
-
       let
         pkgs = nixpkgs.legacyPackages.${system};
-
         rstudio = pkgs.rstudioWrapper.override {
           packages =
             with pkgs.rPackages;
@@ -37,10 +34,12 @@
               factoextra
               arules
               arulesViz
-              hopkins
               fpc
               psych
               corrplot
+              profvis
+              pROC
+              nnet
             ]
             ++ [ pkgs.rstudio ];
         };
@@ -56,6 +55,5 @@
           ];
         };
       }
-
     );
 }

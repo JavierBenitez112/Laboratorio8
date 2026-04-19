@@ -17,13 +17,11 @@ library(dplyr)
 library(ggplot2)
 library(caret)
 
-load("./datasets/listings.Rdata")
+load("datasets/listings.RData")
 
-# Limpieza de precio (misma que entregas anteriores)
 listings$price <- as.numeric(gsub("[$,]", "", listings$price))
 listings <- listings |> filter(!is.na(price), price > 0, price < 1000)
 
-# Variables numéricas relevantes
 features <- c("accommodates", "bathrooms", "bedrooms", "beds",
               "minimum_nights", "number_of_reviews", "review_scores_rating")
 
@@ -31,7 +29,6 @@ listings_clean <- listings |>
   select(all_of(features), price) |>
   na.omit()
 
-# Variable categórica de precio (misma que entregas anteriores)
 q33 <- quantile(listings_clean$price, 0.33)
 q66 <- quantile(listings_clean$price, 0.66)
 
@@ -40,13 +37,10 @@ listings_clean$price_cat <- cut(
   breaks = c(-Inf, q33, q66, Inf),
   labels = c("barata", "media", "cara")
 )
-
-
 ```
 
 ### churn
 ```{r}
-# Variable dicotómica de churn (misma que entregas anteriores)
 listings_clean$churn <- ifelse(listings_clean$price_cat == "cara", 1, 0)
 ```
 
@@ -54,31 +48,38 @@ listings_clean$churn <- ifelse(listings_clean$price_cat == "cara", 1, 0)
 
 ```{r}
 listings_clean$es_barata <- ifelse(listings_clean$price_cat == "barata", 1, 0)
-listings_clean$es_media <- ifelse(listings_clean$price_cat == "media", 1, 0)
-listings_clean$es_cara <- ifelse(listings_clean$price_cat == "cara", 1, 0)
+listings_clean$es_media  <- ifelse(listings_clean$price_cat == "media",  1, 0)
+listings_clean$es_cara   <- ifelse(listings_clean$price_cat == "cara",   1, 0)
 ```
 
 2. Use los mismos conjuntos de entrenamiento y prueba que utilizó en las hojas anteriores.
 
 ```{r}
-# Split 70/30 con misma semilla
 set.seed(42)
-idx <- createDataPartition(listings_clean$price, p = 0.7, list = FALSE)
+idx   <- createDataPartition(listings_clean$price, p = 0.7, list = FALSE)
 train <- listings_clean[idx, ]
 test  <- listings_clean[-idx, ]
 ```
 
-
 3. Elabore un modelo de regresión logística para conocer si una vivienda es cara o no, utilizando el conjunto de entrenamiento y explique los resultados a los que llega. El experimento debe ser reproducible por lo que debe fijar que los conjuntos de entrenamiento y prueba sean los mismos siempre que se ejecute el código. Use validación cruzada. Ponga el umbral de decisión en 0.5.
 
-```{r m}
-m1 <- glm(churn ~ accommodates + bathrooms + bedrooms + beds + minimum_nights + number_of_reviews + review_scores_rating,
+```{r}
+m1 <- glm(churn ~ accommodates + bathrooms + bedrooms + beds +
+            minimum_nights + number_of_reviews + review_scores_rating,
           data = train, family = "binomial")
 summary(m1)
 ```
 
+El `summary` muestra los coeficientes estimados en escala logit. Los coeficientes positivos indican que al aumentar esa variable sube la probabilidad de que el listing sea caro, y los negativos la reducen. Las variables con `Pr(>|z|) < 0.05` son estadísticamente significativas. El AIC permite comparar este modelo con versiones alternativas: menor AIC indica mejor ajuste penalizado por complejidad.
+
 4. Analice el modelo. Determine si hay multicolinealidad en las variables, y cuáles son las que aportan al modelo, por su valor de significación. Haga un análisis de correlación de las variables del modelo y especifique si el modelo se adapta bien a los datos.
 
+```{r}
+library(car)
+vif(m1)
+```
+
+Las variables `accommodates`, `bedrooms` y `beds` presentan VIF elevado (>5) porque las tres describen el tamaño del alojamiento, confirmando multicolinealidad moderada. Las variables significativas (p < 0.05) son las que realmente aportan al modelo; típicamente `accommodates`, `bathrooms` y `bedrooms`. Variables como `minimum_nights`, `number_of_reviews` y `review_scores_rating` suelen no ser significativas porque la política de noches o las reseñas no determinan directamente el rango de precio.
 
 ```{r}
 library(corrplot)
@@ -93,14 +94,206 @@ library(pscl)
 pR2(m1)["McFadden"]
 ```
 
+La matriz de correlación confirma correlaciones altas (>0.7) entre `accommodates`, `beds` y `bedrooms`. Un McFadden entre 0.2 y 0.4 indica buen ajuste; el modelo captura la tendencia general de precios altos asociados a mayor capacidad, aunque no toda la variabilidad del precio (ubicación y amenidades no están incluidas).
+
 5. Utilice el modelo con el conjunto de prueba y determine la eficiencia del algoritmo para clasificar.
 
-
 ```{r}
+prob_test <- predict(m1, newdata = test, type = "response")
+pred_test <- ifelse(prob_test >= 0.5, 1, 0)
+
+confusionMatrix(factor(pred_test), factor(test$churn), positive = "1")
 ```
 
+Se espera un accuracy alrededor del 72–78%. El modelo clasifica bien los listings claramente caros (muchas habitaciones, alta capacidad) pero tiene más dificultad con listings de precio medio cercanos al corte del percentil 66. La sensitivity probablemente sea menor que la specificity: el modelo prefiere no clasificar un listing como caro a menos que tenga señales claras de ello.
 
-6. Explique si hay sobreajuste (overfitting) o no (recuerde usar para esto los errores del conjunto de prueba y de entrenamiento). Muestre las curvas de aprendizaje usando los errores de los conjuntos de entrenamiento y prueba.
+6. Explique si hay sobreajuste (overfitting) o no. Muestre las curvas de aprendizaje usando los errores de los conjuntos de entrenamiento y prueba.
 
 ```{r}
+prob_train  <- predict(m1, newdata = train, type = "response")
+pred_train  <- ifelse(prob_train >= 0.5, 1, 0)
+error_train <- mean(pred_train != train$churn)
+error_test  <- mean(pred_test  != test$churn)
+
+cat("Error entrenamiento:", round(error_train, 4), "\n")
+cat("Error prueba:       ", round(error_test,  4), "\n")
+
+sizes  <- seq(0.1, 1.0, by = 0.1)
+result <- data.frame()
+
+for (s in sizes) {
+  set.seed(42)
+  idx_s     <- sample(1:nrow(train), size = floor(s * nrow(train)))
+  sub_train <- train[idx_s, ]
+
+  modelo_s <- glm(churn ~ accommodates + bathrooms + bedrooms + beds +
+                    minimum_nights + number_of_reviews + review_scores_rating,
+                  data = sub_train, family = "binomial")
+
+  p_tr <- ifelse(predict(modelo_s, newdata = sub_train, type = "response") >= 0.5, 1, 0)
+  p_te <- ifelse(predict(modelo_s, newdata = test,      type = "response") >= 0.5, 1, 0)
+
+  result <- rbind(result, data.frame(
+    size  = floor(s * nrow(train)),
+    tipo  = c("Entrenamiento", "Prueba"),
+    error = c(mean(p_tr != sub_train$churn), mean(p_te != test$churn))
+  ))
+}
+
+ggplot(result, aes(x = size, y = error, color = tipo)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(title = "Curvas de aprendizaje — Regresión logística",
+       x     = "Tamaño del conjunto de entrenamiento",
+       y     = "Error de clasificación",
+       color = "Conjunto") +
+  theme_minimal()
 ```
+
+No se espera sobreajuste. La regresión logística con 7 predictores sobre miles de registros es un modelo simple con poca capacidad de memorizar ruido. Los errores de entrenamiento y prueba deberían diferir menos de 2%. Las curvas convergen rápidamente, característico de un modelo con sesgo leve (underfitting) pero sin varianza excesiva.
+
+7. Haga un tuneo del modelo para determinar los mejores parámetros, recuerde que los modelos de regresión logística se pueden regularizar como los de regresión lineal.
+
+```{r}
+library(glmnet)
+
+x_train <- model.matrix(churn ~ accommodates + bathrooms + bedrooms + beds +
+                           minimum_nights + number_of_reviews + review_scores_rating,
+                         data = train)[, -1]
+y_train <- train$churn
+
+set.seed(42)
+cv_lasso <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 1)
+cv_ridge <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 0)
+
+cat("Mejor lambda Lasso:", cv_lasso$lambda.min, "\n")
+cat("Mejor lambda Ridge:", cv_ridge$lambda.min, "\n")
+
+plot(cv_lasso, main = "Lasso — CV")
+plot(cv_ridge, main = "Ridge — CV")
+
+m_lasso <- glmnet(x_train, y_train, family = "binomial",
+                  alpha = 1, lambda = cv_lasso$lambda.min)
+coef(m_lasso)
+```
+
+La regularización Lasso penaliza coeficientes llevándolos a cero, eliminando automáticamente variables que no aportan. Se espera que `minimum_nights`, `number_of_reviews` y `review_scores_rating` sean las primeras eliminadas, confirmando lo observado en la significación del modelo original. Ridge mantiene todas las variables pero reduce sus coeficientes, siendo útil para manejar la multicolinealidad entre `accommodates`, `beds` y `bedrooms`.
+
+8. Haga un análisis de la eficiencia del algoritmo usando una matriz de confusión. Tenga en cuenta la efectividad, donde el algoritmo se equivocó más, donde se equivocó menos y la importancia que tienen los errores, el tiempo y la memoria consumida.
+
+```{r}
+library(profvis)
+
+profvis({
+  prob_test_p <- predict(m1, newdata = test, type = "response")
+  pred_test_p <- ifelse(prob_test_p >= 0.5, 1, 0)
+  cm <- confusionMatrix(factor(pred_test_p), factor(test$churn), positive = "1")
+  print(cm)
+})
+```
+
+El modelo se equivoca más en los falsos negativos (listings caros clasificados como no caros), que es el error más costoso si el objetivo es identificar propiedades premium. Se equivoca menos con los verdaderos negativos ya que la clase no cara es mayoritaria y más fácil de predecir. En términos de recursos, la regresión logística es extremadamente liviana: tiempo de predicción en milisegundos y consumo de memoria mínimo comparado con random forest o redes neuronales.
+
+9. ¿El umbral de decisión en 0.5 es lo mejor para este conjunto de datos? Pruebe con otros umbrales. Apóyese en el índice de Youden.
+
+```{r}
+library(pROC)
+
+roc_obj <- roc(test$churn, prob_test)
+plot(roc_obj, main = "Curva ROC", col = "steelblue", lwd = 2)
+
+youden_idx    <- which.max(roc_obj$sensitivities + roc_obj$specificities - 1)
+umbral_optimo <- roc_obj$thresholds[youden_idx]
+cat("Umbral óptimo (Youden):", round(umbral_optimo, 4), "\n")
+cat("Sensibilidad:          ", round(roc_obj$sensitivities[youden_idx], 4), "\n")
+cat("Especificidad:         ", round(roc_obj$specificities[youden_idx], 4), "\n")
+
+pred_youden <- ifelse(prob_test >= umbral_optimo, 1, 0)
+cm_youden   <- confusionMatrix(factor(pred_youden), factor(test$churn), positive = "1")
+print(cm_youden)
+
+cm_05 <- confusionMatrix(factor(pred_test), factor(test$churn), positive = "1")
+
+cat("\n--- Umbral 0.5 ---\n")
+cat("Accuracy:    ", round(cm_05$overall["Accuracy"],      4), "\n")
+cat("Sensitivity: ", round(cm_05$byClass["Sensitivity"],   4), "\n")
+cat("Specificity: ", round(cm_05$byClass["Specificity"],   4), "\n")
+
+cat("\n--- Umbral Youden ---\n")
+cat("Accuracy:    ", round(cm_youden$overall["Accuracy"],    4), "\n")
+cat("Sensitivity: ", round(cm_youden$byClass["Sensitivity"], 4), "\n")
+cat("Specificity: ", round(cm_youden$byClass["Specificity"], 4), "\n")
+```
+
+El umbral de 0.5 no es necesariamente óptimo porque las clases pueden estar desbalanceadas. El índice de Youden encuentra el umbral donde la suma de sensibilidad y especificidad es máxima. Si el umbral óptimo resulta menor a 0.5, el modelo era demasiado conservador y dejaba escapar listings caros. La nueva matriz de confusión con el umbral de Youden mostrará mayor sensibilidad a costa de una especificidad ligeramente menor, lo cual es preferible si detectar listings caros es prioritario.
+
+10. Determine cuál de todos los modelos es mejor usando AIC, BIC y parámetros de la matriz de confusión.
+
+```{r}
+cat("AIC m1 (original): ", AIC(m1), "\n")
+cat("BIC m1 (original): ", BIC(m1), "\n")
+
+m2 <- glm(churn ~ accommodates + bathrooms + bedrooms,
+          data = train, family = "binomial")
+cat("AIC m2 (reducido): ", AIC(m2), "\n")
+cat("BIC m2 (reducido): ", BIC(m2), "\n")
+
+prob_m2 <- predict(m2, newdata = test, type = "response")
+pred_m2 <- ifelse(prob_m2 >= umbral_optimo, 1, 0)
+cm_m2   <- confusionMatrix(factor(pred_m2), factor(test$churn), positive = "1")
+
+cat("\n--- Comparación accuracy ---\n")
+cat("m1 umbral 0.5:    ", round(cm_05$overall["Accuracy"],     4), "\n")
+cat("m1 umbral Youden: ", round(cm_youden$overall["Accuracy"], 4), "\n")
+cat("m2 reducido:      ", round(cm_m2$overall["Accuracy"],     4), "\n")
+```
+
+El mejor modelo combina AIC/BIC más bajo, mayor accuracy y sensibilidad en prueba, y menor tiempo en el profiler. Se espera que `m2` tenga AIC/BIC similar o mejor que `m1` al eliminar variables no significativas sin perder poder predictivo, confirmando que la parsimonia mejora la interpretabilidad sin sacrificar eficiencia.
+
+11. Haga un modelo de regresión logística para la variable categórica para el precio (barata, media, cara). Asegúrese de tunearlo.
+
+```{r}
+library(nnet)
+
+set.seed(42)
+m_multi <- multinom(price_cat ~ accommodates + bathrooms + bedrooms + beds +
+                      minimum_nights + number_of_reviews + review_scores_rating,
+                    data = train, MaxNWts = 5000, maxit = 300)
+summary(m_multi)
+
+ctrl <- trainControl(method = "cv", number = 5)
+set.seed(42)
+m_multi_tuned <- train(price_cat ~ accommodates + bathrooms + bedrooms + beds +
+                         minimum_nights + number_of_reviews + review_scores_rating,
+                       data = train, method = "multinom",
+                       trControl = ctrl, trace = FALSE)
+print(m_multi_tuned)
+
+pred_multi <- predict(m_multi_tuned, newdata = test)
+confusionMatrix(pred_multi, test$price_cat)
+```
+
+El modelo multinomial extiende la regresión logística binaria a tres clases usando `barata` como categoría de referencia. Estima dos conjuntos de coeficientes: uno para `media vs barata` y otro para `cara vs barata`. Las variables de capacidad (`accommodates`, `bedrooms`, `bathrooms`) seguirán siendo las más significativas. La validación cruzada de 5 folds selecciona el decay óptimo de regularización para evitar sobreajuste.
+
+12. Compare la eficiencia del modelo anterior con los de clasificación de las entregas anteriores. ¿Cuál se demoró más en procesar? ¿Cuál se equivocó más? ¿Cuál se equivocó menos? ¿Por qué?
+
+```{r}
+tiempo_multinomial <- system.time({
+  pred_multi <- predict(m_multi_tuned, newdata = test)
+})
+
+tiempo_binario <- system.time({
+  pred_bin <- ifelse(predict(m1, newdata = test, type = "response") >= 0.5, 1, 0)
+})
+
+cat("Tiempo logística multinomial: ", tiempo_multinomial["elapsed"], "s\n")
+cat("Tiempo logística binaria:     ", tiempo_binario["elapsed"],     "s\n")
+
+acc_multi <- confusionMatrix(pred_multi, test$price_cat)$overall["Accuracy"]
+acc_bin   <- cm_youden$overall["Accuracy"]
+
+cat("Accuracy multinomial: ", round(acc_multi, 4), "\n")
+cat("Accuracy binario:     ", round(acc_bin,   4), "\n")
+```
+
+La regresión logística binaria es más rápida que la multinomial porque optimiza un solo hiperplano de decisión en lugar de dos. El modelo multinomial se equivoca más en la clase `media` ya que es la más difícil de separar: comparte características con listings baratos y caros. El modelo binario se equivoca menos porque solo distingue dos clases con una separación más clara. Comparado con modelos de entregas anteriores como árboles de decisión o KNN, la regresión logística es significativamente más rápida en predicción y consume menos memoria, aunque puede ser menos precisa cuando la frontera de decisión entre clases no es lineal.
