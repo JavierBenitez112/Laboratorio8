@@ -1,0 +1,139 @@
+---
+title: "Lab7"
+author: "Pedro Avila, Javier Benitez, Brandon Rivera"
+date: "2026-04-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Pasaporte
+
+### Preparación de datos
+```{r}
+library(dplyr)
+library(ggplot2)
+library(caret)
+
+load("datasets/listings.RData")
+
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+listings <- listings |> filter(!is.na(price), price > 0, price < 1000)
+
+features <- c("accommodates", "bathrooms", "bedrooms", "beds",
+              "minimum_nights", "number_of_reviews", "review_scores_rating")
+
+listings_clean <- listings |>
+  select(all_of(features), price) |>
+  na.omit()
+
+q33 <- quantile(listings_clean$price, 0.33)
+q66 <- quantile(listings_clean$price, 0.66)
+
+listings_clean$price_cat <- cut(
+  listings_clean$price,
+  breaks = c(-Inf, q33, q66, Inf),
+  labels = c("barata", "media", "cara")
+)
+```
+
+
+1. Use los mismos conjuntos de entrenamiento y prueba de las hojas de trabajo pasadas para probar el algoritmo.
+
+```{r}
+set.seed(42)
+idx   <- createDataPartition(listings_clean$price, p = 0.7, list = FALSE)
+train <- listings_clean[idx, ]
+test  <- listings_clean[-idx, ]
+```
+
+2. Explore los datos y explique las transformaciones que debe hacerle para generar un modelo de máquinas vectoriales de soporte.
+3. Use como variable respuesta la variable categórica que especifica si la casa es barata, media o cara.
+
+```{r}
+summary(train)
+ggplot(train, aes(x = price)) +
+  geom_histogram(bins = 30, fill = "steelblue", color = "white") +
+  labs(title = "Distribución de precios", x = "Precio", y = "Frecuencia") +
+  theme_minimal()
+ggplot(train, aes(x = price_cat)) +
+  geom_bar(fill = "steelblue", color = "white") +
+  labs(title = "Distribución de categorías de precio", x = "Categoría de precio", y = "Frecuencia") +
+  theme_minimal()
+```
+
+Las SVM calculan distancias (o productos punto) entre puntos en el espacio de características, por lo que variables con escalas muy distintas distorsionan ese cálculo: `minimum_nights` (rango 1–365) y `number_of_reviews` (rango 1–1592) dominarían sobre `review_scores_rating` (rango 1–5) sin normalización. Además, ambas variables presentan fuerte sesgo positivo (media << máximo), lo que concentra la mayoría de los puntos en valores bajos y genera outliers que dificultan encontrar el hiperplano óptimo. Por ello se aplican dos transformaciones: (1) **logaritmo** en las variables sesgadas para comprimir la cola derecha, y (2) **estandarización z-score** (media 0, desviación 1) en todos los predictores para igualar la influencia de cada variable en el kernel. Las clases (`price_cat`) ya están balanceadas (≈14k observaciones cada una), por lo que no se requiere re-muestreo.
+
+```{r transformaciones-svm}
+train_svm <- train
+test_svm  <- test
+
+train_svm$minimum_nights    <- log1p(train_svm$minimum_nights)
+train_svm$number_of_reviews <- log1p(train_svm$number_of_reviews)
+test_svm$minimum_nights     <- log1p(test_svm$minimum_nights)
+test_svm$number_of_reviews  <- log1p(test_svm$number_of_reviews)
+
+pre_proc <- preProcess(train_svm[, features], method = c("center", "scale"))
+train_svm[, features] <- predict(pre_proc, train_svm[, features])
+test_svm[, features]  <- predict(pre_proc, test_svm[, features])
+
+train_svm$price_cat <- factor(train_svm$price_cat)
+test_svm$price_cat  <- factor(test_svm$price_cat)
+
+summary(train_svm[, features])
+```
+
+Tras la transformación todas las variables tienen media ≈ 0 y desviación estándar ≈ 1, eliminando la ventaja artificial de las variables de mayor magnitud. El parámetro de escala se aprende **solo del conjunto de entrenamiento** y se aplica al de prueba para evitar fuga de información.
+
+4. Genere varios (más de 2) modelos de SVM con diferentes kernels y distintos valores en los parámetros c, gamma (circular) y d (en caso de que utilice el polinomial). Puede tunear el modelo de forma automática siempre que explique los resultados
+5. Use los modelos para predecir el valor de la variable respuesta
+6. Haga las matrices de confusión respectivas.
+7. Analice si los modelos están sobre ajustados o desajustados. ¿Qué puede hacer para manejar el sobreajuste o desajuste?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
