@@ -170,9 +170,225 @@ print(acc_summary)
 ```
 
 6. Haga las matrices de confusión respectivas.
+
+```{r}
+library(dplyr); library(ggplot2); library(caret); library(e1071); library(tidyr)
+
+load("datasets/listings.RData")
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+listings <- listings |> filter(!is.na(price), price > 0, price < 1000)
+
+features <- c("accommodates", "bathrooms", "bedrooms", "beds",
+              "minimum_nights", "number_of_reviews", "review_scores_rating")
+
+listings_clean <- listings |> select(all_of(features), price) |> na.omit()
+q33 <- quantile(listings_clean$price, 0.33)
+q66 <- quantile(listings_clean$price, 0.66)
+listings_clean$price_cat <- cut(listings_clean$price,
+  breaks = c(-Inf, q33, q66, Inf), labels = c("barata", "media", "cara"))
+
+set.seed(42)
+idx   <- createDataPartition(listings_clean$price, p = 0.7, list = FALSE)
+train <- listings_clean[idx, ]
+test  <- listings_clean[-idx, ]
+
+# ── Transformaciones ──────────────────────────────────────────────────────────
+train_svm <- train; test_svm <- test
+train_svm$minimum_nights    <- log1p(train_svm$minimum_nights)
+train_svm$number_of_reviews <- log1p(train_svm$number_of_reviews)
+test_svm$minimum_nights     <- log1p(test_svm$minimum_nights)
+test_svm$number_of_reviews  <- log1p(test_svm$number_of_reviews)
+pre_proc <- preProcess(train_svm[, features], method = c("center", "scale"))
+train_svm[, features] <- predict(pre_proc, train_svm[, features])
+test_svm[, features]  <- predict(pre_proc, test_svm[, features])
+train_svm$price_cat <- factor(train_svm$price_cat)
+test_svm$price_cat  <- factor(test_svm$price_cat)
+
+# ── Modelos ───────────────────────────────────────────────────────────────────
+frm <- price_cat ~ accommodates + bathrooms + bedrooms + beds +
+                   minimum_nights + number_of_reviews + review_scores_rating
+
+svm_linear <- svm(frm, data = train_svm, kernel = "linear",     cost = 1,             scale = FALSE)
+svm_radial <- svm(frm, data = train_svm, kernel = "radial",     cost = 1, gamma = 0.1, scale = FALSE)
+svm_poly   <- svm(frm, data = train_svm, kernel = "polynomial", cost = 1, gamma = 0.1, degree = 3, scale = FALSE)
+
+set.seed(42)
+tune_result <- tune(svm, frm, data = train_svm, kernel = "radial", scale = FALSE,
+  ranges = list(cost = c(0.1, 1, 10), gamma = c(0.01, 0.1, 0.5)),
+  tunecontrol = tune.control(cross = 5))
+svm_tuned <- tune_result$best.model
+
+# ── Predicciones ──────────────────────────────────────────────────────────────
+pred_linear <- predict(svm_linear, test_svm)
+pred_radial <- predict(svm_radial, test_svm)
+pred_poly   <- predict(svm_poly,   test_svm)
+pred_tuned  <- predict(svm_tuned,  test_svm)
+
+# ── Matrices de confusión ─────────────────────────────────────────────────────
+cm_linear <- confusionMatrix(pred_linear, test_svm$price_cat)
+cm_radial <- confusionMatrix(pred_radial, test_svm$price_cat)
+cm_poly   <- confusionMatrix(pred_poly,   test_svm$price_cat)
+cm_tuned  <- confusionMatrix(pred_tuned,  test_svm$price_cat)
+
+cat("========================================\n")
+cat("  Kernel Lineal (C = 1)\n")
+cat("========================================\n")
+print(cm_linear)
+
+cat("========================================\n")
+cat("  Kernel RBF (C = 1, gamma = 0.1)\n")
+cat("========================================\n")
+print(cm_radial)
+
+cat("========================================\n")
+cat("  Kernel Polinomial (C = 1, d = 3)\n")
+cat("========================================\n")
+print(cm_poly)
+
+cat("========================================\n")
+cat("  Kernel RBF Tuneado (grid search CV-5)\n")
+cat("========================================\n")
+print(cm_tuned)
+
+# ── Tabla resumen comparativa ─────────────────────────────────────────────────
+metricas <- data.frame(
+  Modelo   = c("Lineal", "RBF", "Polinomial", "Tuneado"),
+  Accuracy = c(cm_linear$overall["Accuracy"], cm_radial$overall["Accuracy"],
+               cm_poly$overall["Accuracy"],   cm_tuned$overall["Accuracy"]),
+  Kappa    = c(cm_linear$overall["Kappa"],    cm_radial$overall["Kappa"],
+               cm_poly$overall["Kappa"],      cm_tuned$overall["Kappa"])
+)
+cat("\n--- Resumen de métricas en prueba ---\n")
+print(round(metricas, 4))
+
+# ── Visualización ─────────────────────────────────────────────────────────────
+plot_cm <- function(cm, titulo) {
+  df <- as.data.frame(cm$table)
+  ggplot(df, aes(x = Reference, y = Prediction, fill = Freq)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Freq), size = 5, fontface = "bold") +
+    scale_fill_gradient(low = "#EEF4FB", high = "#2471A3") +
+    labs(title = titulo, x = "Real", y = "Predicho", fill = "N") +
+    theme_minimal(base_size = 13)
+}
+
+plot_cm(cm_linear, "Matriz de Confusión — Kernel Lineal")
+plot_cm(cm_radial, "Matriz de Confusión — Kernel RBF")
+plot_cm(cm_poly,   "Matriz de Confusión — Kernel Polinomial")
+plot_cm(cm_tuned,  "Matriz de Confusión — Kernel RBF Tuneado")
+```
+
+Las matrices muestran que los valores en la diagonal corresponden a clasificaciones correctas, mientras que los errores fuera de ella se concentran principalmente en la clase `media`, cuyas fronteras de precio se solapan con `barata` y `cara`. El modelo tuneado presenta la mayor accuracy y el Kappa más alto, indicando mejor acuerdo con las clases reales más allá del azar.
+
 7. Analice si los modelos están sobre ajustados o desajustados. ¿Qué puede hacer para manejar el sobreajuste o desajuste?
 
+```{r}
+# ── Preparación de datos ──────────────────────────────────────────────────────
+library(dplyr); library(ggplot2); library(caret); library(e1071); library(tidyr)
 
+load("datasets/listings.RData")
+listings$price <- as.numeric(gsub("[$,]", "", listings$price))
+listings <- listings |> filter(!is.na(price), price > 0, price < 1000)
+
+features <- c("accommodates", "bathrooms", "bedrooms", "beds",
+              "minimum_nights", "number_of_reviews", "review_scores_rating")
+
+listings_clean <- listings |> select(all_of(features), price) |> na.omit()
+q33 <- quantile(listings_clean$price, 0.33)
+q66 <- quantile(listings_clean$price, 0.66)
+listings_clean$price_cat <- cut(listings_clean$price,
+  breaks = c(-Inf, q33, q66, Inf), labels = c("barata", "media", "cara"))
+
+set.seed(42)
+idx   <- createDataPartition(listings_clean$price, p = 0.7, list = FALSE)
+train <- listings_clean[idx, ]
+test  <- listings_clean[-idx, ]
+
+train_svm <- train; test_svm <- test
+train_svm$minimum_nights    <- log1p(train_svm$minimum_nights)
+train_svm$number_of_reviews <- log1p(train_svm$number_of_reviews)
+test_svm$minimum_nights     <- log1p(test_svm$minimum_nights)
+test_svm$number_of_reviews  <- log1p(test_svm$number_of_reviews)
+pre_proc <- preProcess(train_svm[, features], method = c("center", "scale"))
+train_svm[, features] <- predict(pre_proc, train_svm[, features])
+test_svm[, features]  <- predict(pre_proc, test_svm[, features])
+train_svm$price_cat <- factor(train_svm$price_cat)
+test_svm$price_cat  <- factor(test_svm$price_cat)
+
+frm <- price_cat ~ accommodates + bathrooms + bedrooms + beds +
+                   minimum_nights + number_of_reviews + review_scores_rating
+
+svm_linear <- svm(frm, data = train_svm, kernel = "linear",     cost = 1,             scale = FALSE)
+svm_radial <- svm(frm, data = train_svm, kernel = "radial",     cost = 1, gamma = 0.1, scale = FALSE)
+svm_poly   <- svm(frm, data = train_svm, kernel = "polynomial", cost = 1, gamma = 0.1, degree = 3, scale = FALSE)
+
+set.seed(42)
+tune_result <- tune(svm, frm, data = train_svm, kernel = "radial", scale = FALSE,
+  ranges = list(cost = c(0.1, 1, 10), gamma = c(0.01, 0.1, 0.5)),
+  tunecontrol = tune.control(cross = 5))
+svm_tuned <- tune_result$best.model
+
+# ── Accuracy en entrenamiento y prueba ────────────────────────────────────────
+acc_train <- function(model, data) mean(predict(model, data) == data$price_cat)
+acc_test  <- function(model, data) mean(predict(model, data) == data$price_cat)
+
+resumen_ajuste <- data.frame(
+  Modelo    = c("Lineal", "RBF", "Polinomial", "Tuneado"),
+  Acc_Train = c(acc_train(svm_linear, train_svm), acc_train(svm_radial, train_svm),
+                acc_train(svm_poly,   train_svm), acc_train(svm_tuned,  train_svm)),
+  Acc_Test  = c(acc_test(svm_linear, test_svm),   acc_test(svm_radial, test_svm),
+                acc_test(svm_poly,   test_svm),   acc_test(svm_tuned,  test_svm))
+)
+resumen_ajuste$Diferencia <- resumen_ajuste$Acc_Train - resumen_ajuste$Acc_Test
+
+cat("--- Diagnóstico de sobreajuste / desajuste ---\n")
+print(round(resumen_ajuste, 4))
+
+# ── Gráfico comparativo Train vs Test ─────────────────────────────────────────
+resumen_long <- pivot_longer(
+  resumen_ajuste,
+  cols      = c("Acc_Train", "Acc_Test"),
+  names_to  = "Conjunto",
+  values_to = "Accuracy"
+)
+
+ggplot(resumen_long, aes(x = Modelo, y = Accuracy, fill = Conjunto)) +
+  geom_col(position = "dodge", width = 0.6) +
+  geom_text(aes(label = round(Accuracy, 3)),
+            position = position_dodge(width = 0.6),
+            vjust = -0.4, size = 3.5) +
+  scale_fill_manual(
+    values = c("Acc_Train" = "steelblue", "Acc_Test" = "tomato"),
+    labels = c("Entrenamiento", "Prueba")
+  ) +
+  labs(
+    title = "Accuracy: Entrenamiento vs Prueba por Modelo SVM",
+    y     = "Accuracy",
+    x     = "Modelo",
+    fill  = "Conjunto"
+  ) +
+  theme_minimal(base_size = 13) +
+  coord_cartesian(ylim = c(0.5, 1))
+
+# ── Gráfico de diferencias ─────────────────────────────────────────────────────
+ggplot(resumen_ajuste, aes(x = Modelo, y = Diferencia, fill = Diferencia > 0.05)) +
+  geom_col(width = 0.5) +
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "red", linewidth = 0.8) +
+  scale_fill_manual(values = c("FALSE" = "steelblue", "TRUE" = "tomato"),
+                    labels = c("Ajuste aceptable", "Posible sobreajuste"),
+                    name   = "Diagnóstico") +
+  labs(
+    title    = "Diferencia Train − Test por Modelo SVM",
+    subtitle = "Línea roja = umbral de sobreajuste (0.05)",
+    y        = "Acc_Train − Acc_Test",
+    x        = "Modelo"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+Al comparar la accuracy en entrenamiento y en prueba, una diferencia mayor a 0.05 indica sobreajuste: el modelo memorizó el conjunto de entrenamiento y no generaliza bien. Esto es común en kernels RBF o polinomial con `gamma` o `C` muy altos. Por el contrario, si ambas accuracies son bajas (< 0.60), hay desajuste, situación más probable en el kernel lineal cuando las clases no son linealmente separables.
+
+Para corregir sobreajuste se puede reducir `C` o `gamma`, usar validación cruzada para seleccionar hiperparámetros (como se hizo en el modelo tuneado) o aumentar el conjunto de entrenamiento. Para corregir desajuste conviene probar kernels más complejos, aumentar `C` o `degree`, o aplicar feature engineering que capture mejor la relación entre las características y el precio.
 
 
 
