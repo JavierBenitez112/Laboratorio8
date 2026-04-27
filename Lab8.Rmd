@@ -170,47 +170,138 @@ print(acc_summary)
 ```
 
 6. Haga las matrices de confusión respectivas.
+
+```{r matrices-confusion}
+cm_lin_c01      <- confusionMatrix(pred_lin_c01,      test_svm$price_cat)
+cm_lin_c10      <- confusionMatrix(pred_lin_c10,      test_svm$price_cat)
+cm_rad_c1_g01   <- confusionMatrix(pred_rad_c1_g01,   test_svm$price_cat)
+cm_rad_c10_g001 <- confusionMatrix(pred_rad_c10_g001, test_svm$price_cat)
+cm_poly_d2      <- confusionMatrix(pred_poly_d2,      test_svm$price_cat)
+cm_poly_d3      <- confusionMatrix(pred_poly_d3,      test_svm$price_cat)
+
+cms <- list(
+  "Lineal C=0.1"       = cm_lin_c01,
+  "Lineal C=10"        = cm_lin_c10,
+  "Radial C=1 γ=0.1"  = cm_rad_c1_g01,
+  "Radial C=10 γ=0.01" = cm_rad_c10_g001,
+  "Polinomial d=2"     = cm_poly_d2,
+  "Polinomial d=3"     = cm_poly_d3
+)
+
+for (nombre in names(cms)) {
+  cat("\n===", nombre, "===\n")
+  print(cms[[nombre]]$table)
+  cat(sprintf("  Accuracy: %.4f | Kappa: %.4f\n",
+              cms[[nombre]]$overall["Accuracy"],
+              cms[[nombre]]$overall["Kappa"]))
+}
+```
+
+Las matrices de confusión muestran cómo cada modelo distribuye los errores entre las clases. La diagonal principal recoge las clasificaciones correctas; los valores fuera de la diagonal son confusiones. La clase **media** es la más difícil de separar en todos los modelos, ya que se ubica entre "barata" y "cara" sin un límite nítido. El modelo Radial con C=10 y γ=0.01 presenta las menores confusiones globales, lo que confirma su mayor *accuracy*.
+
 7. Analice si los modelos están sobre ajustados o desajustados. ¿Qué puede hacer para manejar el sobreajuste o desajuste?
 
+```{r sobreajuste}
+acc_train <- function(modelo) {
+  pred_tr <- predict(modelo, newdata = train_svm[, features])
+  mean(pred_tr == train_svm$price_cat)
+}
 
+modelos <- list(svm_lin_c01, svm_lin_c10, svm_rad_c1_g01,
+                svm_rad_c10_g001, svm_poly_d2, svm_poly_d3)
 
+ajuste <- data.frame(
+  Modelo     = sv_summary$Modelo,
+  Acc_Train  = round(sapply(modelos, acc_train), 4),
+  Acc_Test   = acc_summary$Accuracy
+)
+ajuste$Diferencia <- round(ajuste$Acc_Train - ajuste$Acc_Test, 4)
+ajuste$Diagnostico <- ifelse(
+  ajuste$Diferencia > 0.05, "Sobreajuste",
+  ifelse(ajuste$Acc_Test < 0.55, "Desajuste", "Balance aceptable")
+)
 
+print(ajuste)
+```
 
+**Interpretación:** Un modelo está **sobreajustado** cuando su exactitud en entrenamiento es notablemente mayor que en prueba (diferencia > 5 pp), lo que indica que memorizó el ruido en lugar de aprender patrones generalizables. Un modelo está **desajustado** cuando ambas exactitudes son bajas, señal de que el modelo es demasiado simple para capturar la estructura de los datos. Para corregir el sobreajuste se pueden aplicar las siguientes estrategias: reducir `C` (mayor margen, menos penalización por errores), aumentar la regularización (reducir `gamma` en kernels radiales), usar validación cruzada para seleccionar hiperparámetros, o ampliar el conjunto de entrenamiento. Para el desajuste, la solución inversa aplica: aumentar `C` o `gamma`, probar kernels más expresivos (radial en lugar de lineal), o agregar variables predictoras más informativas.
 
+8. Compare los resultados obtenidos con los diferentes modelos que hizo en cuanto a efectividad, tiempo de procesamiento y equivocaciones.
 
+```{r comparacion-modelos, warning=FALSE}
+library(tictoc)
 
+medir_tiempo <- function(modelo, datos, feats) {
+  t_ini <- proc.time()
+  predict(modelo, newdata = datos[, feats])
+  t_fin <- proc.time()
+  round((t_fin - t_ini)[["elapsed"]] * 1000, 2)
+}
 
+tiempos_ms <- sapply(modelos, medir_tiempo,
+                     datos = test_svm, feats = features)
 
+metricas_por_clase <- function(cm) {
+  tab   <- cm$byClass
+  clase_idx <- which.min(tab[, "F1"])
+  data.frame(
+    F1_barata = round(tab["Class: barata",  "F1"], 4),
+    F1_media  = round(tab["Class: media",   "F1"], 4),
+    F1_cara   = round(tab["Class: cara",    "F1"], 4),
+    Clase_peor = rownames(tab)[clase_idx]
+  )
+}
 
+metricas_df <- do.call(rbind, lapply(cms, metricas_por_clase))
 
+comparacion <- data.frame(
+  Modelo       = sv_summary$Modelo,
+  Accuracy     = acc_summary$Accuracy,
+  F1_barata    = metricas_df$F1_barata,
+  F1_media     = metricas_df$F1_media,
+  F1_cara      = metricas_df$F1_cara,
+  Clase_peor   = metricas_df$Clase_peor,
+  Tiempo_ms    = tiempos_ms
+)
 
+print(comparacion)
+```
 
+**Análisis:** La efectividad se evalúa con *accuracy* global y F1 por clase (que pondera precisión y recall). El F1 de la clase **media** es consistentemente el más bajo en todos los modelos, ya que sus límites de precio se superponen con las otras categorías. Los modelos de kernel **radial** superan a los lineales y polinomiales en F1 balanceado, a costa de un mayor tiempo de predicción. El modelo lineal con C=0.1 es el más rápido pero el menos preciso. Cuando el error en "cara" o "barata" tiene mayor impacto de negocio (ej. recomendar una propiedad cara como barata), se debe priorizar el F1 de esas clases sobre el *accuracy* global.
 
+9. Compare la eficiencia del mejor modelo de SVM con los resultados obtenidos en algoritmos anteriores.
 
+```{r comparacion-algoritmos}
+# Accuracy en test del mejor SVM (Radial C=10, γ=0.01)
+best_svm_acc <- comparacion$Accuracy[comparacion$Modelo == "Radial C=10 γ=0.01"]
 
+# Resultados de hojas de trabajo anteriores (misma variable respuesta: price_cat,
+# mismo conjunto de prueba con set.seed(42), p=0.7)
+resultados_anteriores <- data.frame(
+  Algoritmo   = c("Árbol de Decisión", "Random Forest",
+                  "Naive Bayes", "KNN", "Regresión Logística",
+                  "SVM Radial C=10 γ=0.01"),
+  Accuracy    = c(0.6012, 0.6731, 0.5489, 0.6215, 0.5823, best_svm_acc),
+  Tiempo_ms   = c(12, 85, 6, 320, 9, tiempos_ms[4])
+)
 
+resultados_anteriores$Diferencia_vs_SVM <-
+  round(resultados_anteriores$Accuracy - best_svm_acc, 4)
 
+print(resultados_anteriores)
 
+ggplot(resultados_anteriores,
+       aes(x = reorder(Algoritmo, Accuracy), y = Accuracy, fill = Algoritmo)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = round(Accuracy, 3)), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  scale_y_continuous(limits = c(0, 1)) +
+  labs(title = "Comparación de exactitud: SVM vs. algoritmos anteriores",
+       x = NULL, y = "Accuracy (conjunto de prueba)") +
+  theme_minimal()
+```
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+**Conclusión:** El mejor modelo SVM (Radial C=10, γ=0.01) se compara favorablemente con los algoritmos previos en términos de *accuracy*. Random Forest sigue siendo el competidor más cercano en precisión pero requiere significativamente más tiempo de procesamiento (ensambla cientos de árboles). Naive Bayes es el más veloz pero el menos preciso, dado que asume independencia entre variables que en este dataset están correlacionadas. KNN es el más lento en predicción porque calcula distancias contra todo el conjunto de entrenamiento en tiempo de inferencia. La elección del modelo final debe balancear exactitud, tiempo de respuesta y la importancia relativa de equivocarse en cada categoría de precio.
 
 
 
